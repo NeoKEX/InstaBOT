@@ -410,6 +410,50 @@ class InstagramBot {
           logger.error('Failed to get user info by username', { error: error.message, username });
           throw error;
         }
+      },
+
+      sendPhotoFromUrl: async (threadID, url, opts = {}) => {
+        try {
+          return await ig.sendPhotoFromUrl(threadID, url, opts);
+        } catch (error) {
+          logger.error('Failed to send photo from url', { error: error.message, threadID });
+          throw error;
+        }
+      },
+
+      sendVideoFromUrl: async (threadID, url, opts = {}) => {
+        try {
+          return await ig.sendVideoFromUrl(threadID, url, opts);
+        } catch (error) {
+          logger.error('Failed to send video from url', { error: error.message, threadID });
+          throw error;
+        }
+      },
+
+      sendVoiceFromUrl: async (threadID, url, opts = {}) => {
+        try {
+          return await ig.sendVoiceFromUrl(threadID, url, opts);
+        } catch (error) {
+          logger.error('Failed to send voice from url', { error: error.message, threadID });
+          throw error;
+        }
+      },
+
+      sendReaction: async (reaction, messageID) => {
+        try {
+          return await ig.sendReaction(reaction, messageID);
+        } catch (error) {
+          logger.error('Failed to send reaction', { error: error.message, messageID });
+        }
+      },
+
+      replyToMessage: async (threadID, text, replyToMessageID) => {
+        try {
+          return await ig.replyToMessage(threadID, text, replyToMessageID);
+        } catch (error) {
+          logger.error('Failed to reply to message', { error: error.message, threadID });
+          throw error;
+        }
       }
     };
   }
