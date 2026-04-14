@@ -154,6 +154,10 @@ class InstagramBot {
         this.handleThreadEvent(event).catch(error => {
           logger.error('Error handling thread event', { error: error.message });
         });
+      } else if (event.type === 'message_reaction') {
+        this.handleReactionEvent(event).catch(error => {
+          logger.error('Error handling reaction event', { error: error.message });
+        });
       }
     });
 
@@ -260,6 +264,28 @@ class InstagramBot {
       }
     } catch (error) {
       logger.error('Error in handleThreadEvent', { error: error.message });
+    }
+  }
+
+  // ── Reaction handling ─────────────────────────────────────────────────
+
+  async handleReactionEvent(event) {
+    try {
+      await this.eventLoader.handleEvent('message_reaction', {
+        threadID:        event.threadID,
+        threadId:        event.threadID,
+        senderID:        event.senderID,
+        senderId:        event.senderID,
+        messageID:       event.messageID,
+        messageId:       event.messageID,
+        reaction:        event.reaction,
+        reactionStatus:  event.reactionStatus,
+        targetMessageID: event.targetMessageID,
+        targetMessageId: event.targetMessageID,
+        timestamp:       event.timestamp || Date.now()
+      });
+    } catch (error) {
+      logger.error('Error in handleReactionEvent', { error: error.message });
     }
   }
 
