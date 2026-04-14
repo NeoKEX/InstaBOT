@@ -1,4 +1,24 @@
-const { default: InstagramChatAPI } = require('@neoaz07/nkxica');
+const {
+  loadCookies,
+  loginWithCookies,
+  listen,
+  stopListening,
+  getCurrentUserID,
+  sendMessage,
+  sendDirectMessage,
+  unsendMessage,
+  sendPhoto,
+  sendVideo,
+  sendVoice,
+  sendTypingIndicator,
+  markAsRead,
+  getThreadInfo,
+  getInbox,
+  getUserInfo,
+  getUserInfoByUsername,
+  setOptions
+} = require('@neoaz07/nkxica');
+
 const fs = require('fs');
 const config = require('./config');
 const logger = require('./utils/logger');
@@ -8,10 +28,6 @@ const Banner = require('./utils/banner');
 
 class InstagramBot {
   constructor() {
-    // Suppress neokex-ica verbose logging by filtering console output
-    this.setupCleanLogging();
-    
-    this.ig = new InstagramChatAPI();
     this.api = null;
     this.userID = null;
     this.username = null;
@@ -22,96 +38,30 @@ class InstagramBot {
     this.isRunning = false;
   }
 
-  setupCleanLogging() {
-    // Store original console methods
-    const originalLog = console.log;
-    const originalError = console.error;
-    
-    // Override console.log to filter neokex-ica verbose messages
-    console.log = (...args) => {
-      const message = args.join(' ');
-      // Keep important neokex-ica messages
-      if (message.includes('neokex-ica')) {
-        if (message.includes('[WARN]') || 
-            message.includes('[ERROR]') ||
-            message.includes('Authenticated') || 
-            message.includes('Verified user') ||
-            message.includes('session') ||
-            message.includes('rate limit')) {
-          logger.warn(message.replace(/\[.*?\] neokex-ica › /, 'Instagram: '));
-          return;
-        }
-        // Skip verbose INFO/EVENT/SUCCESS messages
-        if (message.includes('[INFO]') || message.includes('[EVENT]') || message.includes('[SUCCESS]')) {
-          return;
-        }
-      }
-      originalLog.apply(console, args);
-    };
-    
-    // Override console.error to filter and log properly
-    console.error = (...args) => {
-      const message = args.join(' ');
-      // Filter out expected errors
-      if (message.includes('Failed to get inbox') || 
-          message.includes('Failed to get pending inbox') ||
-          message.includes('Inbox endpoint failed')) {
-        return;
-      }
-      // Log errors through winston
-      if (message.includes('neokex-ica')) {
-        logger.error(message.replace(/\[ERROR\] neokex-ica › /, 'Instagram API: '));
-      } else if (message.includes('Error')) {
-        logger.error(message);
-      } else {
-        originalError.apply(console, args);
-      }
-    };
-  }
-
-  /**
-   * Initialize and start the bot
-   */
   async start() {
     try {
-      // Display premium banner
       Banner.display();
-      
       logger.info('Starting Instagram Bot...');
-      
-      // Load commands and events
+
       await this.commandLoader.loadCommands();
       await this.eventLoader.loadEvents();
       this.eventLoader.registerEvents();
 
-      // Load cookies and connect
-      await this.loadCookies();
-      await this.connect();
-
-      // Setup message listener
-      this.setupMessageListener();
-
-      // Mark as running
-      this.isRunning = true;
-
-      // Trigger ready event
-      await this.eventLoader.handleEvent('ready', {});
-
-      // Start listening for messages
-      await this.ig.dm.startPolling(config.POLLING_INTERVAL_MS);
-
-      // Keep the process alive
-      this.keepAlive();
-    } catch (error) {
-      logger.error('Failed to start bot', {
-        error: error.message,
-        stack: error.stack
+      setOptions({
+        selfListen: false,
+        listenEvents: true,
+        autoMarkRead: false,
+        logLevel: 'warn',
+        autoReconnect: config.AUTO_RECONNECT,
+        maxRetries: config.MAX_RECONNECT_ATTEMPTS
       });
-      
+
+      await this.loadAndLogin();
+    } catch (error) {
+      logger.error('Failed to start bot', { error: error.message, stack: error.stack });
       await this.eventLoader.handleEvent('error', error);
-      
       if (this.shouldReconnect && this.reconnectAttempts < config.MAX_RECONNECT_ATTEMPTS) {
-        this.reconnect();
+        this.scheduleReconnect();
       } else {
         logger.error('Unable to start bot, exiting...');
         process.exit(1);
@@ -119,504 +69,360 @@ class InstagramBot {
     }
   }
 
-  /**
-   * Load cookies from account.txt file
-   */
-  async loadCookies() {
-    try {
-      logger.info('Loading cookies from account.txt...');
-      
-      if (!fs.existsSync(config.ACCOUNT_FILE)) {
-        throw new Error(`Cookie file not found: ${config.ACCOUNT_FILE}`);
-      }
+  async loadAndLogin() {
+    if (!fs.existsSync(config.ACCOUNT_FILE)) {
+      throw new Error(`Cookie file not found: ${config.ACCOUNT_FILE}`);
+    }
 
-      // Check if file has valid cookies (not just the template)
-      const content = fs.readFileSync(config.ACCOUNT_FILE, 'utf-8');
-      const hasValidCookies = content.split('\n').some(line => {
-        const trimmedLine = line.trim();
-        // Skip empty lines and comment lines (but #HttpOnly_ is valid!)
-        if (trimmedLine === '' || (trimmedLine.startsWith('#') && !trimmedLine.startsWith('#HttpOnly'))) {
-          return false;
+    const content = fs.readFileSync(config.ACCOUNT_FILE, 'utf-8');
+    const hasValidCookies = content.split('\n').some(line => {
+      const trimmed = line.trim();
+      if (trimmed === '' || (trimmed.startsWith('#') && !trimmed.startsWith('#HttpOnly'))) return false;
+      return trimmed.includes('sessionid');
+    });
+
+    if (!hasValidCookies) {
+      throw new Error('account.txt contains no valid cookies. Please add your Instagram cookies in Netscape format.');
+    }
+
+    const cookieContent = fs.readFileSync(config.ACCOUNT_FILE, 'utf-8');
+    logger.info('Loading cookies from account.txt...');
+    loadCookies(cookieContent, 'netscape');
+    logger.info('Cookies loaded. Connecting to Instagram...');
+
+    return new Promise((resolve, reject) => {
+      loginWithCookies(cookieContent, {}, (err) => {
+        if (err) return reject(err);
+
+        try {
+          const idResult = getCurrentUserID();
+          this.userID = typeof idResult === 'object'
+            ? (idResult.userID || idResult.userId || String(idResult))
+            : String(idResult);
+        } catch (e) {
+          this.userID = 'unknown';
         }
-        // Check if line contains sessionid
-        return trimmedLine.includes('sessionid');
+        this.username = this.userID !== 'unknown' ? this.userID : 'unknown';
+
+        this.api = this.createAPIWrapper();
+        this.reconnectAttempts = 0;
+        this.isRunning = true;
+
+        logger.info('Connected to Instagram', { userID: this.userID });
+
+        this.eventLoader.handleEvent('ready', {}).then(() => {
+          this.startListening();
+          resolve();
+        });
       });
-
-      if (!hasValidCookies) {
-        throw new Error('account.txt contains no valid cookies. Please add your Instagram cookies in Netscape format.');
-      }
-
-      this.ig.loadCookiesFromFile(config.ACCOUNT_FILE);
-      logger.info('Cookies loaded successfully');
-    } catch (error) {
-      logger.error('Failed to load cookies', { error: error.message });
-      throw error;
-    }
+    });
   }
 
-  /**
-   * Connect to Instagram and verify authentication
-   */
-  async connect() {
+  startListening() {
+    logger.info('Starting message listener...');
+
+    listen((err, event) => {
+      if (err) {
+        const errMsg = err.message || String(err);
+        logger.error('Listen error', { error: errMsg });
+        const isAuthError = errMsg.toLowerCase().includes('not authorized') ||
+                            errMsg.toLowerCase().includes('login_required') ||
+                            errMsg.toLowerCase().includes('unauthorized');
+        if (this.shouldReconnect && !isAuthError) {
+          this.scheduleReconnect();
+        } else if (isAuthError) {
+          logger.error('Session cookies are expired or invalid. Please update account.txt with fresh cookies.');
+        }
+        return;
+      }
+
+      if (!event || event.type !== 'message') return;
+
+      this.handleMessage(event).catch(error => {
+        logger.error('Error handling message', { error: error.message });
+      });
+    });
+
+    this.keepAlive();
+  }
+
+  async handleMessage(event) {
     try {
-      logger.info('Connecting to Instagram...');
+      const senderID = event.senderID;
+      const threadID = event.threadID;
+      const itemId = event.messageID;
 
-      // Get current user info to verify authentication
-      try {
-        this.userID = this.ig.getCurrentUserID();
-        this.username = this.ig.getCurrentUsername();
-        logger.info('Successfully authenticated with Instagram', {
-          userID: this.userID,
-          username: this.username
-        });
-      } catch (error) {
-        logger.warn('Could not fetch user info, but cookies are loaded', { 
-          error: error.message 
-        });
-        // Even if we can't get user info, we might still be authenticated
-        this.userID = 'unknown';
-        this.username = 'unknown';
+      if (senderID && senderID === this.userID) {
+        logger.debug('Ignoring message from self');
+        return;
       }
 
-      // Set up API wrapper
-      this.api = this.createAPIWrapper();
-      
-      this.reconnectAttempts = 0;
-      logger.info('Bot connected successfully');
+      const messageTimestamp = event.timestamp || Date.now();
+      const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+      if (messageTimestamp < fiveMinutesAgo) {
+        logger.debug('Skipping old message');
+        return;
+      }
+
+      const messageId = itemId ? `${threadID}-${itemId}` : `${threadID}-${messageTimestamp}`;
+      const database = require('./utils/database');
+
+      if (database.isMessageProcessed(messageId)) return;
+      database.markMessageAsProcessed(messageId);
+
+      const normalizedEvent = {
+        threadID,
+        threadId: threadID,
+        messageID: itemId,
+        messageId: itemId,
+        senderID,
+        senderId: senderID,
+        body: event.body || '',
+        timestamp: messageTimestamp,
+        type: event.type || 'message',
+        attachments: event.attachments || [],
+        isVoiceMessage: event.isVoiceMessage || false
+      };
+
+      await this.eventLoader.handleEvent('message', normalizedEvent);
     } catch (error) {
-      logger.error('Failed to connect to Instagram', {
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
+      logger.error('Error in handleMessage', { error: error.message, stack: error.stack });
     }
   }
 
-  /**
-   * Create API wrapper with commonly used methods
-   */
   createAPIWrapper() {
     const self = this;
-    
+
     return {
-      sendMessage: async (text, threadId) => {
+      sendMessage: async (text, threadID) => {
         try {
-          // Send typing indicator to "wake up" the chat before sending message
-          // This triggers Instagram's realtime system and helps messages appear faster
-          try {
-            if (self.ig.dm && typeof self.ig.dm.indicateActivity === 'function') {
-              await self.ig.dm.indicateActivity(threadId);
-              // Small delay to let Instagram process the typing indicator
-              await new Promise(resolve => setTimeout(resolve, 500));
-            }
-          } catch (typingError) {
-            // Typing indicator is optional, don't fail if it doesn't work
-            logger.debug('Could not send typing indicator', { error: typingError.message });
+          if (config.TYPING_INDICATOR) {
+            try {
+              await new Promise((res, rej) => {
+                sendTypingIndicator(threadID, (err) => err ? rej(err) : res());
+              });
+              await new Promise(r => setTimeout(r, 500));
+            } catch (_) {}
           }
-          
-          const result = await self.ig.dm.sendMessage(threadId, text);
-          
-          // Store the message ID for potential unsend operations (persistent storage)
-          if (result && result.item_id) {
-            const database = require('./utils/database');
-            database.storeSentMessage(threadId, result.item_id);
-          }
-          
-          logger.debug('Message sent successfully', { threadId, messageLength: text.length });
-          return result;
-        } catch (error) {
-          const errorMsg = error.message || '';
-          
-          // Check for rate limit errors
-          if (errorMsg.includes('rate') || errorMsg.includes('429') || errorMsg.includes('spam')) {
-            logger.error('Rate limit or spam detected - slowing down', {
-              error: errorMsg,
-              threadId
-            });
-            // Add extra delay on rate limit
-            await new Promise(resolve => setTimeout(resolve, 5000));
-          } else {
-            logger.error('Failed to send message', {
-              error: errorMsg,
-              threadId
-            });
-          }
-          throw error;
-        }
-      },
 
-      sendMessageToUser: async (text, userId) => {
-        try {
-          const result = await self.ig.dm.sendMessageToUser(userId, text);
-          
-          // Delay to ensure Instagram processes the message
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          
-          logger.debug('Direct message sent', { userId, messageLength: text.length });
-          return result;
-        } catch (error) {
-          const errorMsg = error.message || '';
-          
-          // Check for rate limit errors
-          if (errorMsg.includes('rate') || errorMsg.includes('429') || errorMsg.includes('spam')) {
-            logger.error('Rate limit or spam detected - slowing down', {
-              error: errorMsg,
-              userId
+          return await new Promise((resolve, reject) => {
+            sendMessage(text, threadID, (err, result) => {
+              if (err) return reject(err);
+              if (result && result.messageID) {
+                const database = require('./utils/database');
+                database.storeSentMessage(threadID, result.messageID);
+              }
+              resolve(result);
             });
-            // Add extra delay on rate limit
-            await new Promise(resolve => setTimeout(resolve, 5000));
-          } else {
-            logger.error('Failed to send direct message', {
-              error: errorMsg,
-              userId
-            });
-          }
-          throw error;
-        }
-      },
-
-      getThread: async (threadId) => {
-        try {
-          const thread = await self.ig.dm.getThread(threadId);
-          return thread;
-        } catch (error) {
-          logger.error('Failed to get thread', {
-            error: error.message,
-            threadId
           });
+        } catch (error) {
+          logger.error('Failed to send message', { error: error.message, threadID });
+          throw error;
+        }
+      },
+
+      sendMessageToUser: async (text, userID) => {
+        try {
+          return await new Promise((resolve, reject) => {
+            sendDirectMessage(text, [userID], (err, result) => {
+              if (err) return reject(err);
+              resolve(result);
+            });
+          });
+        } catch (error) {
+          logger.error('Failed to send direct message', { error: error.message, userID });
+          throw error;
+        }
+      },
+
+      getThread: async (threadID) => {
+        try {
+          return await new Promise((resolve, reject) => {
+            getThreadInfo(threadID, (err, info) => {
+              if (err) return reject(err);
+              resolve(info);
+            });
+          });
+        } catch (error) {
+          logger.error('Failed to get thread', { error: error.message, threadID });
           throw error;
         }
       },
 
       getInbox: async () => {
         try {
-          const inbox = await self.ig.getInbox();
-          return inbox;
-        } catch (error) {
-          logger.error('Failed to get inbox', {
-            error: error.message
+          return await new Promise((resolve, reject) => {
+            getInbox((err, inbox) => {
+              if (err) return reject(err);
+              resolve(inbox);
+            });
           });
+        } catch (error) {
+          logger.error('Failed to get inbox', { error: error.message });
           throw error;
         }
       },
 
-      markAsSeen: async (threadId, itemId) => {
+      markAsSeen: async (threadID) => {
         try {
-          await self.ig.dm.markAsSeen(threadId, itemId);
-          logger.debug('Message marked as seen', { threadId, itemId });
-        } catch (error) {
-          logger.error('Failed to mark as seen', {
-            error: error.message,
-            threadId,
-            itemId
+          return await new Promise((resolve, reject) => {
+            markAsRead(threadID, true, (err) => {
+              if (err) return reject(err);
+              resolve();
+            });
           });
+        } catch (error) {
+          logger.error('Failed to mark as seen', { error: error.message, threadID });
         }
       },
 
-      sendPhoto: async (photoPath, threadId, caption = '') => {
+      sendPhoto: async (photoPath, threadID) => {
         try {
-          // Send typing indicator to wake up the chat
-          try {
-            if (self.ig.dm && typeof self.ig.dm.indicateActivity === 'function') {
-              await self.ig.dm.indicateActivity(threadId);
-              await new Promise(resolve => setTimeout(resolve, 500));
-            }
-          } catch (typingError) {
-            logger.debug('Could not send typing indicator', { error: typingError.message });
+          if (config.TYPING_INDICATOR) {
+            try { await new Promise((res, rej) => sendTypingIndicator(threadID, e => e ? rej(e) : res())); } catch (_) {}
           }
-          
-          const result = await self.ig.dm.sendPhoto(threadId, photoPath);
-          
-          logger.debug('Photo sent successfully', { threadId, photoPath });
-          Banner.success(`Photo sent to thread ${threadId}`);
-          return result;
-        } catch (error) {
-          logger.error('Failed to send photo', {
-            error: error.message,
-            threadId,
-            photoPath
+          return await new Promise((resolve, reject) => {
+            sendPhoto(threadID, photoPath, {}, (err, result) => {
+              if (err) return reject(err);
+              resolve(result);
+            });
           });
-          Banner.error('Send Photo', error.message);
+        } catch (error) {
+          logger.error('Failed to send photo', { error: error.message, threadID });
           throw error;
         }
       },
 
-      sendVideo: async (videoPath, threadId, caption = '') => {
+      sendVideo: async (videoPath, threadID) => {
         try {
-          // Send typing indicator to wake up the chat
-          try {
-            if (self.ig.dm && typeof self.ig.dm.indicateActivity === 'function') {
-              await self.ig.dm.indicateActivity(threadId);
-              await new Promise(resolve => setTimeout(resolve, 500));
-            }
-          } catch (typingError) {
-            logger.debug('Could not send typing indicator', { error: typingError.message });
+          if (config.TYPING_INDICATOR) {
+            try { await new Promise((res, rej) => sendTypingIndicator(threadID, e => e ? rej(e) : res())); } catch (_) {}
           }
-          
-          const result = await self.ig.dm.sendVideo(threadId, videoPath);
-          
-          logger.debug('Video sent successfully', { threadId, videoPath });
-          Banner.success(`Video sent to thread ${threadId}`);
-          return result;
-        } catch (error) {
-          logger.error('Failed to send video', {
-            error: error.message,
-            threadId,
-            videoPath
+          return await new Promise((resolve, reject) => {
+            sendVideo(threadID, videoPath, {}, (err, result) => {
+              if (err) return reject(err);
+              resolve(result);
+            });
           });
-          Banner.error('Send Video', error.message);
+        } catch (error) {
+          logger.error('Failed to send video', { error: error.message, threadID });
           throw error;
         }
       },
 
-      sendAudio: async (audioPath, threadId) => {
+      sendAudio: async (audioPath, threadID) => {
         try {
-          // Send typing indicator to wake up the chat
-          try {
-            if (self.ig.dm && typeof self.ig.dm.indicateActivity === 'function') {
-              await self.ig.dm.indicateActivity(threadId);
-              await new Promise(resolve => setTimeout(resolve, 500));
-            }
-          } catch (typingError) {
-            logger.debug('Could not send typing indicator', { error: typingError.message });
+          if (config.TYPING_INDICATOR) {
+            try { await new Promise((res, rej) => sendTypingIndicator(threadID, e => e ? rej(e) : res())); } catch (_) {}
           }
-          
-          const result = await self.ig.dm.sendVoiceNote(threadId, audioPath);
-          
-          logger.debug('Audio sent successfully', { threadId, audioPath });
-          Banner.success(`Audio sent to thread ${threadId}`);
-          return result;
-        } catch (error) {
-          logger.error('Failed to send audio', {
-            error: error.message,
-            threadId,
-            audioPath
+          return await new Promise((resolve, reject) => {
+            sendVoice(threadID, audioPath, {}, (err, result) => {
+              if (err) return reject(err);
+              resolve(result);
+            });
           });
-          Banner.error('Send Audio', error.message);
+        } catch (error) {
+          logger.error('Failed to send audio', { error: error.message, threadID });
           throw error;
         }
       },
 
-      unsendMessage: async (threadId, itemId) => {
+      unsendMessage: async (threadID, messageID) => {
         try {
-          await self.ig.dm.unsendMessage(threadId, itemId);
-          logger.debug('Message unsent', { threadId, itemId });
-          
-          // Remove from persistent storage
+          await new Promise((resolve, reject) => {
+            unsendMessage(threadID, messageID, (err) => {
+              if (err) return reject(err);
+              resolve();
+            });
+          });
           const database = require('./utils/database');
-          database.removeSentMessage(threadId, itemId);
+          database.removeSentMessage(threadID, messageID);
         } catch (error) {
-          logger.error('Failed to unsend message', {
-            error: error.message,
-            threadId,
-            itemId
-          });
+          logger.error('Failed to unsend message', { error: error.message, threadID, messageID });
           throw error;
         }
       },
-      
-      getLastSentMessage: (threadId) => {
+
+      getLastSentMessage: (threadID) => {
         const database = require('./utils/database');
-        return database.getLastSentMessage(threadId);
+        return database.getLastSentMessage(threadID);
+      },
+
+      getUserInfo: async (userID) => {
+        try {
+          return await new Promise((resolve, reject) => {
+            getUserInfo(userID, (err, info) => {
+              if (err) return reject(err);
+              resolve(info);
+            });
+          });
+        } catch (error) {
+          logger.error('Failed to get user info', { error: error.message, userID });
+          throw error;
+        }
+      },
+
+      getUserInfoByUsername: async (username) => {
+        try {
+          return await new Promise((resolve, reject) => {
+            getUserInfoByUsername(username, (err, info) => {
+              if (err) return reject(err);
+              resolve(info);
+            });
+          });
+        } catch (error) {
+          logger.error('Failed to get user info by username', { error: error.message, username });
+          throw error;
+        }
       }
     };
   }
 
-  /**
-   * Setup message listener using neokex-ica's event system
-   */
-  setupMessageListener() {
-    logger.info('Setting up message listener...');
-
-    this.ig.on('message', async (message) => {
-      try {
-        await this.handleMessage(message);
-      } catch (error) {
-        logger.error('Error in message listener', {
-          error: error.message,
-          stack: error.stack
-        });
-      }
-    });
-
-    logger.info('Message listener configured');
-  }
-
-  /**
-   * Handle incoming messages
-   */
-  async handleMessage(message) {
-    try {
-      // Extract the full message object (nested in message.message field)
-      const fullMessage = message.message || message;
-      
-      // Extract user ID early to check if it's from self
-      const senderID = message.userId || message.user_id || fullMessage.user_id || message.senderId;
-      
-      // IMPORTANT: Ignore messages from self FIRST before any processing
-      // This prevents the bot from processing its own sent messages
-      if (senderID && senderID === this.userID) {
-        logger.debug('Ignoring message from self', { senderID });
-        return;
-      }
-      
-      // Extract item ID with proper fallback chain
-      const itemId = message.item_id || message.itemId || fullMessage.item_id;
-      const threadId = message.thread_id || message.threadId;
-      
-      // Create a unique ID for this message to prevent duplicates
-      // Use item_id if available, otherwise fall back to timestamp
-      const messageId = itemId ? `${threadId}-${itemId}` : `${threadId}-${message.timestamp || Date.now()}`;
-      
-      // Skip old messages (only process messages from the last 5 minutes)
-      const messageTimestamp = message.timestamp || Date.now();
-      const currentTime = Date.now();
-      const fiveMinutesAgo = currentTime - (5 * 60 * 1000);
-      
-      if (messageTimestamp < fiveMinutesAgo) {
-        logger.debug(`Skipping old message from ${new Date(messageTimestamp).toISOString()}`);
-        return;
-      }
-      
-      // Skip if we've already processed this message (check database for persistence)
-      const database = require('./utils/database');
-      if (database.isMessageProcessed(messageId)) {
-        // Silently skip - Instagram re-broadcasts messages when ACK isn't received
-        return;
-      }
-      
-      // Mark message as processed in database (persists across restarts)
-      database.markMessageAsProcessed(messageId);
-      
-      // Log raw message structure for debugging (only in debug mode)
-      if (config.LOG_LEVEL === 'debug') {
-        logger.debug('Raw message object:', {
-          topLevelKeys: Object.keys(message),
-          fullMessageKeys: Object.keys(fullMessage),
-          hasReply: !!(fullMessage.replied_to_message || fullMessage.replied_to_item_id || 
-                      fullMessage.reply_to_message || fullMessage.parent_message),
-          itemType: fullMessage.item_type,
-          text: fullMessage.text,
-          senderID: senderID
-        });
-      }
-
-      // Transform message to event format
-      const event = {
-        threadId: threadId,
-        messageId: itemId || messageId,
-        senderID: senderID,
-        body: message.text || fullMessage.text || message.message || '',
-        timestamp: messageTimestamp,
-        type: message.itemType || message.item_type || fullMessage.item_type || 'text',
-        // Include reply information - check multiple possible field names in fullMessage
-        replyToItemId: fullMessage.replied_to_message?.item_id || 
-                       fullMessage.replied_to_item_id || 
-                       fullMessage.reply_to_message?.item_id ||
-                       fullMessage.parent_message?.item_id ||
-                       message.replyToItemId || 
-                       message.replied_to_item_id || null,
-        // Include additional message metadata
-        attachments: fullMessage.attachments || message.attachments || [],
-        isVoiceMessage: fullMessage.is_voice_message || message.is_voice_message || false,
-        // Store raw message for debugging
-        _rawMessage: config.LOG_LEVEL === 'debug' ? fullMessage : undefined
-      };
-
-      // Handle message event
-      await this.eventLoader.handleEvent('message', event);
-    } catch (error) {
-      logger.error('Error in handleMessage', {
-        error: error.message,
-        stack: error.stack
-      });
-    }
-  }
-
-  /**
-   * Reconnect to Instagram
-   */
-  async reconnect() {
+  scheduleReconnect() {
     this.reconnectAttempts++;
-    
-    logger.info(`Attempting to reconnect (${this.reconnectAttempts}/${config.MAX_RECONNECT_ATTEMPTS})...`);
-    
     if (this.reconnectAttempts >= config.MAX_RECONNECT_ATTEMPTS) {
       logger.error('Max reconnection attempts reached. Stopping bot.');
       process.exit(1);
     }
-
-    // Stop listening
-    if (this.ig && this.ig.stopListening) {
-      this.ig.stopListening();
-    }
-
-    setTimeout(async () => {
-      try {
-        // Create new instance
-        this.ig = new InstagramChatAPI();
-        await this.loadCookies();
-        await this.connect();
-        this.setupMessageListener();
-        await this.ig.dm.startPolling(config.POLLING_INTERVAL_MS);
-        logger.info('Reconnected successfully');
-        this.isRunning = true;
-        this.reconnectAttempts = 0;
-      } catch (error) {
-        logger.error('Reconnection failed', { error: error.message });
-        this.reconnect();
-      }
+    logger.info(`Reconnecting in 5s (attempt ${this.reconnectAttempts}/${config.MAX_RECONNECT_ATTEMPTS})...`);
+    setTimeout(() => {
+      this.loadAndLogin().catch(err => {
+        logger.error('Reconnection failed', { error: err.message });
+        this.scheduleReconnect();
+      });
     }, 5000);
   }
 
-  /**
-   * Keep process alive and handle graceful shutdown
-   */
+  reconnect() {
+    this.scheduleReconnect();
+  }
+
   keepAlive() {
-    // Handle graceful shutdown
-    const shutdown = async (signal) => {
-      logger.info(`Received ${signal}, shutting down gracefully...`);
-      
+    const shutdown = (signal) => {
+      logger.info(`Received ${signal}, shutting down...`);
       this.isRunning = false;
       this.shouldReconnect = false;
-      
-      // Stop listening
-      if (this.ig && this.ig.stopListening) {
-        this.ig.stopListening();
-        logger.info('Stopped listening for messages');
-      }
-      
+      try { stopListening(); } catch (_) {}
       logger.info('Bot shutdown complete');
       process.exit(0);
     };
 
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
-    
-    // Handle uncaught errors
+
     process.on('uncaughtException', (error) => {
-      logger.error('Uncaught exception', {
-        error: error.message,
-        stack: error.stack
-      });
+      logger.error('Uncaught exception', { error: error.message, stack: error.stack });
     });
 
-    process.on('unhandledRejection', (reason, promise) => {
-      logger.error('Unhandled rejection', {
-        reason: reason,
-        promise: promise
-      });
+    process.on('unhandledRejection', (reason) => {
+      logger.error('Unhandled rejection', { reason: String(reason) });
     });
   }
 }
 
-// Start the bot
 const bot = new InstagramBot();
 bot.start().catch(error => {
-  logger.error('Fatal error starting bot', {
-    error: error.message,
-    stack: error.stack
-  });
+  console.error('Fatal error:', error.message);
   process.exit(1);
 });
 

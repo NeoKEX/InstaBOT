@@ -140,15 +140,6 @@ module.exports = {
         try {
           Banner.commandExecuted(command.config.name, event.senderID, true);
 
-          // Show typing indicator if enabled
-          if (config.TYPING_INDICATOR && bot.ig.dm && typeof bot.ig.dm.indicateActivity === 'function') {
-            try {
-              await bot.ig.dm.indicateActivity(event.threadId);
-            } catch (typingError) {
-              logger.debug('Could not send typing indicator', { error: typingError.message });
-            }
-          }
-
           // Track command usage
           user.commandCount++;
           database.updateUser(event.senderID, user);

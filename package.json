@@ -11,10 +11,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@neoaz07/nkxica": "^1.0.0",
     "axios": "^1.13.1",
     "dotenv": "^17.2.3",
     "fs-extra": "^11.3.2",
-    "@neoaz07/nkxica": "^1.0.0",
     "node-cron": "^4.2.1",
     "tough-cookie": "^6.0.0",
     "winston": "^3.18.3"

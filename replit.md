@@ -1,7 +1,7 @@
 # Instagram Bot Project
 
 ## Overview
-This is a highly advanced Instagram bot built with Node.js and the neokex-ica chat API. The bot is designed to handle Instagram messages, commands, and events similar to GoatbotV2's architecture.
+This is a highly advanced Instagram bot built with Node.js and the `@neoaz07/nkxica` chat API. The bot is designed to handle Instagram messages, commands, and events similar to GoatbotV2's architecture.
 
 ## Recent Changes
 - **2025-10-31 (Latest)**: Improved Message Visibility with Typing Indicator
