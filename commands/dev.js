@@ -5,7 +5,7 @@ module.exports = {
     description: 'Developer panel - Bot developer only',
     usage: 'dev',
     cooldown: 0,
-    role: 3,
+    role: 4,
     author: 'NeoKEX',
     category: 'system'
   },

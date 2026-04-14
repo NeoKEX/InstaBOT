@@ -5,7 +5,7 @@ module.exports = {
     description: 'Manage auto-responses (Admin only)',
     usage: 'manage <add|remove|list> [trigger] [response]',
     cooldown: 5,
-    role: 1,
+    role: 2,
     author: 'NeoKEX',
     category: 'admin'
   },
