@@ -4,14 +4,14 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon index.js",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch",
+    "lint": "eslint .",
+    "format": "prettier --write ."
   },
-  "keywords": [],
-  "author": "NeoKEX",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "@neoaz07/nkxica": "^1.0.1",
+    "@neoaz07/nkxica": "^1.0.2",
     "axios": "^1.13.1",
     "dotenv": "^17.2.3",
     "fs-extra": "^11.3.2",
@@ -19,6 +19,13 @@
     "node-cron": "^4.2.1",
     "sql.js": "^1.14.1",
     "tough-cookie": "^6.0.0",
+    "vm2": "^2.1.5",
     "winston": "^3.18.3"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.1",
+    "eslint": "^8.50.0",
+    "prettier": "^3.0.3"
   }
 }

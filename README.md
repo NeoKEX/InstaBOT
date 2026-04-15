@@ -1,4 +1,4 @@
-# NeoKEX Instagram Bot
+# InstaBOT
 
 A modular, role-based Instagram chatbot built on `@neoaz07/nkxica` — production-ready with a dynamic command/event system.
 
